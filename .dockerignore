@@ -1,0 +1,11 @@
+langchain_env/
+__pycache__/
+*.pyc
+*.pyo
+.env
+uploads/
+chroma_db*/
+pdf_chroma_db/
+*.sqlite3
+pdf_sources/
+.git/

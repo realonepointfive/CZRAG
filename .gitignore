@@ -1,0 +1,21 @@
+# 虚拟环境
+langchain_env/
+
+# 环境变量（含 API Key，绝不提交）
+.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 向量数据库（本地生成，体积大）
+chroma_db*/
+pdf_chroma_db/
+
+# 上传文件
+uploads/
+
+# IDE
+.vscode/
+.idea/
