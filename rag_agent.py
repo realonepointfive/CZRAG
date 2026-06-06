@@ -66,4 +66,10 @@ def build_rag_agent(vectorstore: Chroma) -> AgentExecutor:
     ])
 
     agent = create_tool_calling_agent(llm, tools, prompt)
-    return AgentExecutor(agent=agent, tools=tools, verbose=True, max_iterations=5)
+    return AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=True,
+        max_iterations=15,
+        early_stopping_method="generate",
+    )
