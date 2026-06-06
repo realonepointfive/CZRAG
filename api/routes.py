@@ -2,7 +2,7 @@ import uuid
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, List
 from langchain_chroma import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -27,24 +27,27 @@ UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 
-# ── 上传 PDF ──────────────────────────────────────────────────
-@router.post("/upload", response_model=None, summary="上传 PDF，建立向量索引")
-async def upload_pdf(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="只支持 PDF 文件")
+# ── 上传一个或多个 PDF（新建会话）────────────────────────────
+@router.post("/upload", response_model=None, summary="上传 PDF（支持多文件），新建会话")
+async def upload_pdf(files: List[UploadFile] = File(...)):
+    for f in files:
+        if not f.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"{f.filename} 不是 PDF 文件")
 
     session_id = uuid.uuid4().hex
-    save_path = UPLOAD_DIR / f"{session_id}_{file.filename}"
-
-    with open(save_path, "wb") as f:
-        f.write(await file.read())
+    embeddings = load_embeddings()
+    all_chunks = []
 
     try:
-        documents = build_documents_from_pdf(str(save_path))
-        chunks = split_documents(documents)
-        embeddings = load_embeddings()
+        for file in files:
+            save_path = UPLOAD_DIR / f"{session_id}_{file.filename}"
+            with open(save_path, "wb") as fp:
+                fp.write(await file.read())
+            documents = build_documents_from_pdf(str(save_path))
+            all_chunks.extend(split_documents(documents))
+
         vectorstore = build_vectorstore(
-            chunks,
+            all_chunks,
             persist_directory=f"./chroma_db_{session_id}",
             embeddings=embeddings,
         )
@@ -53,7 +56,45 @@ async def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"索引构建失败: {e}")
 
-    return {"session_id": session_id, "chunks": len(chunks), "filename": file.filename}
+    return {
+        "session_id": session_id,
+        "chunks": len(all_chunks),
+        "files": [f.filename for f in files],
+    }
+
+
+# ── 向已有会话追加 PDF ────────────────────────────────────────
+@router.post("/session/{session_id}/upload", response_model=None, summary="向已有会话追加 PDF")
+async def add_pdf_to_session(session_id: str, files: List[UploadFile] = File(...)):
+    vectorstore = _sessions.get(session_id)
+    if vectorstore is None:
+        raise HTTPException(status_code=404, detail="session_id 不存在，请先调用 /upload 创建会话")
+
+    for f in files:
+        if not f.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"{f.filename} 不是 PDF 文件")
+
+    new_chunks = []
+    try:
+        for file in files:
+            save_path = UPLOAD_DIR / f"{session_id}_{file.filename}"
+            with open(save_path, "wb") as fp:
+                fp.write(await file.read())
+            documents = build_documents_from_pdf(str(save_path))
+            new_chunks.extend(split_documents(documents))
+
+        # 直接往已有 vectorstore 追加，无需重建
+        vectorstore.add_documents(new_chunks)
+        # 重建 agent（vectorstore 对象未变，agent 引用不变，实际可跳过；保险起见重建）
+        _agents[session_id] = build_agent(vectorstore)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"追加索引失败: {e}")
+
+    return {
+        "session_id": session_id,
+        "added_chunks": len(new_chunks),
+        "files": [f.filename for f in files],
+    }
 
 
 # ── Agent 多轮对话 ────────────────────────────────────────────
